@@ -1,64 +1,95 @@
-document.getElementById('contactForm').addEventListener('submit', async function(event) {
-    event.preventDefault(); // Prevent default page refresh on submit
+// ─────────────────────────────────────────────────────────
+//  CONFIG — replace with your real API Gateway URL
+// ─────────────────────────────────────────────────────────
+const API_URL = "https://0z7u2otam4.execute-api.us-east-2.amazonaws.com/production";
 
-    const submitBtn = document.getElementById('submitBtn');
-    const responseMessage = document.getElementById('responseMessage');
-    
-    // 1. Check Honeypot field to prevent automated bot spam
-    const honeypot = document.getElementById('website').value;
-    if (honeypot !== "") {
-        // Silent block for spam bots
-        responseMessage.className = "response-message success";
-        responseMessage.innerText = "تم إرسال رسالتك بنجاح!";
-        responseMessage.style.display = "block";
-        return;
+// ─────────────────────────────────────────────────────────
+//  DOM elements
+// ─────────────────────────────────────────────────────────
+const form       = document.getElementById("feedbackForm");
+const submitBtn  = document.getElementById("submitBtn");
+const btnText    = document.getElementById("btnText");
+const btnLoader  = document.getElementById("btnLoader");
+const successMsg = document.getElementById("successMsg");
+const errorMsg   = document.getElementById("errorMsg");
+const totalCount = document.getElementById("totalCount");
+
+// ─────────────────────────────────────────────────────────
+//  Load total message count on page load
+// ─────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const res  = await fetch(`${API_URL}/stats`);
+    const data = await res.json();
+    totalCount.textContent = data.total_messages ?? "—";
+  } catch {
+    totalCount.textContent = "—";
+  }
+}
+
+loadStats();
+
+// ─────────────────────────────────────────────────────────
+//  Form submit handler
+// ─────────────────────────────────────────────────────────
+form.addEventListener("submit", async function (e) {
+  e.preventDefault();
+
+  // Hide previous messages
+  successMsg.style.display = "none";
+  errorMsg.style.display   = "none";
+
+  // Read values
+  const name     = document.getElementById("name").value.trim();
+  const email    = document.getElementById("email").value.trim();
+  const subject  = document.getElementById("subject").value.trim();
+  const category = document.getElementById("category").value;
+  const message  = document.getElementById("message").value.trim();
+
+  // Simple client-side validation
+  if (!name || !email || !subject || !message) {
+    showError("Please fill in all required fields.");
+    return;
+  }
+
+  // Show loading state
+  setLoading(true);
+
+  try {
+    const response = await fetch(`${API_URL}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, subject, category, message }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Something went wrong. Please try again.");
     }
 
-    // 2. Extract input values from form
-    const formData = {
-        name: document.getElementById('name').value,
-        email: document.getElementById('email').value,
-        subject: document.getElementById('subject').value,
-        message: document.getElementById('message').value
-    };
+    // Success
+    successMsg.style.display = "block";
+    form.reset();
+    loadStats(); // refresh count
 
-    // Update button UI state to sending mode
-    submitBtn.disabled = true;
-    submitBtn.innerText = "جاري الإرسال...";
-    responseMessage.style.display = "none";
-
-    try {
-        // API Gateway endpoint URL
-        const API_URL = "https://mhv27wvj96.execute-api.us-east-2.amazonaws.com/prod/contact";
-
-        // Execute asynchronous HTTP POST request to API Gateway
-        const response = await fetch(API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(formData)
-        });
-
-        // Parse response and verify status code (200 OK)
-        if (response.ok) {
-            responseMessage.className = "response-message success";
-            responseMessage.innerText = "تم إرسال رسالتك بنجاح! سنترد عليك قريباً.";
-            responseMessage.style.display = "block";
-            document.getElementById('contactForm').reset(); // Reset form inputs
-        } else {
-            const errorData = await response.json().catch(() => ({}));
-            console.error("API Error Response:", errorData);
-            throw new Error("API Execution Failed");
-        }
-    } catch (error) {
-        console.error("Submission Failure:", error);
-        responseMessage.className = "response-message error";
-        responseMessage.innerText = "تعذر إرسال الرسالة، يرجى المحاولة لاحقاً.";
-        responseMessage.style.display = "block";
-    } finally {
-        // Restore submit button to initial state
-        submitBtn.disabled = false;
-        submitBtn.innerText = "إرسال الرسالة";
-    }
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    setLoading(false);
+  }
 });
+
+// ─────────────────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────────────────
+function setLoading(isLoading) {
+  submitBtn.disabled      = isLoading;
+  btnText.style.display   = isLoading ? "none"   : "inline";
+  btnLoader.style.display = isLoading ? "inline-block" : "none";
+}
+
+function showError(message) {
+  errorMsg.textContent    = "❌ " + message;
+  errorMsg.style.display  = "block";
+}
