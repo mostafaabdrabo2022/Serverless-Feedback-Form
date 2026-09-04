@@ -1,13 +1,13 @@
 """
-Serverless Contact Form — Lambda Function
+Serverless Feedback & Contact Form — Lambda Function
 =====================================================
 Handles two endpoints:
-  POST /contact  →  save message to DynamoDB + send email via SES
-  GET  /stats    →  return total message count
+  POST /feedback  →  save message + send email via SNS
+  GET  /stats     →  return total message count
 
 Environment Variables required:
-  TABLE_NAME    = contact-messages
-  SENDER_EMAIL  = your-verified-ses-email@domain.com
+  TABLE_NAME  = feedback-messages
+  TOPIC_ARN   = arn:aws:sns:us-east-1:XXXX:feedback-notifications
 """
 
 import json
@@ -17,11 +17,11 @@ import boto3
 from datetime import datetime
 
 # ── AWS clients ────────────────────────────────────────────
-dynamodb = boto3.resource("dynamodb")
-ses      = boto3.client("ses")
+dynamodb  = boto3.resource("dynamodb")
+sns       = boto3.client("sns")
 
-TABLE_NAME   = os.environ["TABLE_NAME"]
-SENDER_EMAIL = os.environ["SENDER_EMAIL"]
+TABLE_NAME = os.environ["TABLE_NAME"]   # feedback-messages
+TOPIC_ARN  = os.environ["TOPIC_ARN"]   # SNS topic ARN
 
 table = dynamodb.Table(TABLE_NAME)
 
@@ -33,12 +33,8 @@ def lambda_handler(event, context):
     method = event.get("httpMethod", "")
     path   = event.get("path", "")
 
-    # Handle CORS preflight request
-    if method == "OPTIONS":
-        return _response(200, {"status": "ok"})
-
-    # ── Route: POST /contact ──────────────────────────────
-    if method == "POST" and path == "/contact":
+    # ── Route: POST /feedback ──────────────────────────────
+    if method == "POST" and path == "/feedback":
         return handle_submit(event)
 
     # ── Route: GET /stats ──────────────────────────────────
@@ -49,7 +45,7 @@ def lambda_handler(event, context):
 
 
 # ══════════════════════════════════════════════════════════
-#  POST /contact  —  Save message & send email via SES
+#  POST /feedback  —  Save message & send email
 # ══════════════════════════════════════════════════════════
 def handle_submit(event):
     try:
@@ -59,7 +55,7 @@ def handle_submit(event):
 
         # Validate required fields
         required = ["name", "email", "subject", "message"]
-        missing  = [f for f in required if not str(body.get(f, "")).strip()]
+        missing  = [f for f in required if not body.get(f, "").strip()]
         if missing:
             return _response(400, {
                 "error": f"Missing required fields: {', '.join(missing)}"
@@ -72,6 +68,7 @@ def handle_submit(event):
             "name":       body["name"].strip(),
             "email":      body["email"].strip(),
             "subject":    body["subject"].strip(),
+            "category":   body.get("category", "general"),
             "message":    body["message"].strip(),
             "status":     "new",
             "created_at": datetime.utcnow().isoformat(),
@@ -80,8 +77,8 @@ def handle_submit(event):
         # Save to DynamoDB
         table.put_item(Item=record)
 
-        # Send email notification via SES
-        _send_ses_email(record)
+        # Send email notification via SNS
+        _send_notification(record)
 
         return _response(200, {
             "message_id": message_id,
@@ -107,18 +104,19 @@ def handle_stats():
 
 
 # ══════════════════════════════════════════════════════════
-#  SES Email Notification
+#  SNS Email Notification
 # ══════════════════════════════════════════════════════════
-def _send_ses_email(record):
-    """Sends an email to the site owner via Amazon SES."""
-    email_subject = f"[Contact Form] New message: {record['subject']}"
+def _send_notification(record):
+    """Sends an email to the site owner via SNS."""
+    subject = f"[FeedbackHub] New message: {record['subject']}"
 
-    email_body = f"""
-You received a new message via Contact Form!
+    body = f"""
+You received a new message on FeedbackHub!
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   From     : {record['name']}
   Email    : {record['email']}
+  Category : {record['category']}
   Subject  : {record['subject']}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -130,24 +128,10 @@ Message ID : {record['message_id']}
 Received   : {record['created_at']} UTC
     """.strip()
 
-    ses.send_email(
-        Source=SENDER_EMAIL,
-        Destination={
-            "ToAddresses": [SENDER_EMAIL]
-        },
-        Message={
-            "Subject": {
-                "Data": email_subject,
-                "Charset": "UTF-8"
-            },
-            "Body": {
-                "Text": {
-                    "Data": email_body,
-                    "Charset": "UTF-8"
-                }
-            }
-        },
-        ReplyToAddresses=[record["email"]]
+    sns.publish(
+        TopicArn=TOPIC_ARN,
+        Subject=subject,
+        Message=body,
     )
 
 
@@ -158,8 +142,8 @@ def _response(status_code, body_dict):
     return {
         "statusCode": status_code,
         "headers": {
-            "Content-Type":                 "application/json",
-            "Access-Control-Allow-Origin":  "*",
+            "Content-Type":                "application/json",
+            "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
         },
